@@ -328,8 +328,7 @@ class ViTForClassfication(nn.Module):
         # logits-> age
         # feature_map-> CNN feature map of last layer of shape [B,512,4,4,4]
         # gradients -> gradients corresponding to feature_map
-        # all_attentions -> Attention probability corresponding to 3 blocks
-        
+        # all_attentions -> Attention probability corresponding to 3 
         if (return_cam) and (not output_attentions) :
             return logits, self.embedding.patch_embeddings.feature_map, self.embedding.patch_embeddings.gradients
         
