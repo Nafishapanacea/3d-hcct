@@ -323,7 +323,7 @@ class ViTForClassfication(nn.Module):
         # logits = torch.cat((logits, extra_features), dim=1)
         logits = self.classifier(logits)
 
-        logits[0].backward()
+        # logits[0].backward()
 
         # logits-> age
         # feature_map-> CNN feature map of last layer of shape [B,512,4,4,4]
