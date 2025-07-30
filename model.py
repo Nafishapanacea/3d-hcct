@@ -14,46 +14,55 @@ class ConvBlock(nn.Module):
         self.act = nn.ReLU()
         self.maxpool = nn.MaxPool3d(kernel_size=2)
         
+        
     def forward(self, x):
         return self.maxpool(self.act((self.bn(self.conv(x)))))
 
-
 class NewGELUActivation(nn.Module):
+    """
+    Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT). Also see
+    the Gaussian Error Linear Units paper: https://arxiv.org/abs/1606.08415
+
+    Taken from https://github.com/huggingface/transformers/blob/main/src/transformers/activations.py
+    """
+
     def forward(self, input):
         return 0.5 * input * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (input + 0.044715 * torch.pow(input, 3.0))))
 
 
 class PatchEmbeddings(nn.Module):
+    """
+    Convert the image into patches and then project them into a vector space.
+    """
+
     def __init__(self, config):
         super().__init__()
         self.image_size = config["image_size"]
         # self.patch_size = config["patch_size"]
         self.num_channels = config["num_channels"]
         self.hidden_size = config["hidden_size"]
+        # Calculate the number of patches from the image size and patch size
+        # self.num_patches = (self.image_size // self.patch_size) ** 3
+        # Create a projection layer to convert the image into patches
+        # The layer projects each patch into a vector of size hidden_size
         self.conv_1 = ConvBlock(self.num_channels, 32, kernel_size=3, stride=1, padding=1)
         self.conv_2 = ConvBlock(32, 64, kernel_size=3, stride=1, padding=1)
         self.conv_3 = ConvBlock(64, 128, kernel_size=3, stride=1, padding=1)
         self.conv_4 = ConvBlock(128, 256, kernel_size=3, stride=1, padding=1)
         self.conv_5 = ConvBlock(256, 512, kernel_size=3, stride=1, padding=1)
         self.num_patches = 512
-        self.gradients = None  # For storing gradients
+        #self.projection = nn.Conv3d(self.num_channels, self.hidden_size, kernel_size=self.patch_size, stride=self.patch_size)
 
-    def save_gradient(self, grad):
-        self.gradients = grad
-
-    def forward(self, x, return_feature_map=False):
+    def forward(self, x):
+        # (batch_size, num_channels, image_depth, image_size, image_size) -> (batch_size, num_patches, hidden_size)
         x = self.conv_1(x)
         x = self.conv_2(x)
         x = self.conv_3(x)
         x = self.conv_4(x)
-        x = self.conv_5(x)  # [B, 512, D, W, H]
-
-        if return_feature_map:
-            # Register hook to get gradients later
-            x.register_hook(self.save_gradient)
-            self.feature_map = x  # Save for Grad-CAM
-
+        x = self.conv_5(x)
+        #x = self.projection(x)
         x = rearrange(x, 'b c d w h -> b c (d w h)')
+        
         return x
 
 
@@ -66,15 +75,24 @@ class Embeddings(nn.Module):
         super().__init__()
         self.config = config
         self.patch_embeddings = PatchEmbeddings(config)
+        # Create a learnable [CLS] token
+        # Similar to BERT, the [CLS] token is added to the beginning of the input sequence
+        # and is used to classify the entire sequence
         self.cls_token = nn.Parameter(torch.randn(1, 1, config["hidden_size"]))
+        # Create position embeddings for the [CLS] token and the patch embeddings
+        # Add 1 to the sequence length for the [CLS] token
         self.position_embeddings = \
             nn.Parameter(torch.randn(1, self.patch_embeddings.num_patches + 1, config["hidden_size"]))
         self.dropout = nn.Dropout(config["hidden_dropout_prob"])
 
-    def forward(self, x, return_feature_map=False):
-        x = self.patch_embeddings(x, return_feature_map=return_feature_map)
+    def forward(self, x):
+        x = self.patch_embeddings(x)
         batch_size, _, _ = x.size()
+        # Expand the [CLS] token to the batch size
+        # (1, 1, hidden_size) -> (batch_size, 1, hidden_size)
         cls_tokens = self.cls_token.expand(batch_size, -1, -1)
+        # Concatenate the [CLS] token to the beginning of the input sequence
+        # This results in a sequence length of (num_patches + 1)
         x = torch.cat((cls_tokens, x), dim=1)
         x = x + self.position_embeddings
         x = self.dropout(x)
@@ -310,8 +328,8 @@ class ViTForClassfication(nn.Module):
         self.classifier = nn.Linear(2*self.hidden_size, self.num_classes)
         self.apply(self._init_weights)
 
-    def forward(self, x, output_attentions=False, return_cam=False):
-        embedding_output = self.embedding(x, return_feature_map=return_cam)
+    def forward(self, x, output_attentions=False):
+        embedding_output = self.embedding(x)
 
         encoder_output, all_attentions = self.encoder(embedding_output, output_attentions=output_attentions)
         cls_logits, activation_logits = encoder_output[:, 0, :], encoder_output[:, 1:, :]
@@ -323,23 +341,15 @@ class ViTForClassfication(nn.Module):
         # logits = torch.cat((logits, extra_features), dim=1)
         logits = self.classifier(logits)
 
-        # logits[0].backward()
-
         # logits-> age
         # feature_map-> CNN feature map of last layer of shape [B,512,4,4,4]
         # gradients -> gradients corresponding to feature_map
         # all_attentions -> Attention probability corresponding to 3 
-        if (return_cam) and (not output_attentions) :
-            return logits, self.embedding.patch_embeddings.feature_map, self.embedding.patch_embeddings.gradients
-        
-        if (not return_cam) and (output_attentions) :
-            return logits, all_attentions
-
-        elif(return_cam) and (output_attentions) :
-            return logits, self.embedding.patch_embeddings.feature_map, self.embedding.patch_embeddings.gradients, all_attentions
-        
-        else:
+       
+        if not output_attentions:
             return logits
+        else:
+            return (logits, all_attentions)
 
         # if not output_attentions:
         #     return (logits, None)
