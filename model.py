@@ -54,14 +54,21 @@ class PatchEmbeddings(nn.Module):
         #self.projection = nn.Conv3d(self.num_channels, self.hidden_size, kernel_size=self.patch_size, stride=self.patch_size)
 
     def forward(self, x):
+        print('original x shape:- ',x.shape)
         # (batch_size, num_channels, image_depth, image_size, image_size) -> (batch_size, num_patches, hidden_size)
         x = self.conv_1(x)
+        print('x1 shape:- ',x.shape)
         x = self.conv_2(x)
+        print('x2 shape:- ',x.shape)
         x = self.conv_3(x)
+        print('x3 shape:- ',x.shape)
         x = self.conv_4(x)
+        print('x4 shape:- ',x.shape)
         x = self.conv_5(x)
         #x = self.projection(x)
+        print('x before rearrange:- ', x.shape)
         x = rearrange(x, 'b c d w h -> b c (d w h)')
+        print('Final x shape(patch embedding):- ', x.shape)
         
         return x
 
@@ -91,11 +98,13 @@ class Embeddings(nn.Module):
         # Expand the [CLS] token to the batch size
         # (1, 1, hidden_size) -> (batch_size, 1, hidden_size)
         cls_tokens = self.cls_token.expand(batch_size, -1, -1)
+        print('cls_tokens:- ', cls_tokens.shape)
         # Concatenate the [CLS] token to the beginning of the input sequence
         # This results in a sequence length of (num_patches + 1)
         x = torch.cat((cls_tokens, x), dim=1)
         x = x + self.position_embeddings
         x = self.dropout(x)
+        print('Embedding shape:-  ',x.shape)
         return x
 
 
@@ -124,6 +133,9 @@ class AttentionHead(nn.Module):
         query = self.query(x)
         key = self.key(x)
         value = self.value(x)
+        print('query:- ', query.shape)
+        print('key:- ', key.shape)
+        print('value:- ', value.shape)
 
         # Calculate the attention scores
         # softmax(Q*K.T/sqrt(head_size))*V
@@ -132,6 +144,8 @@ class AttentionHead(nn.Module):
         attention_probs = nn.functional.softmax(attention_scores, dim=-1)
         attention_probs = self.dropout(attention_probs)
         attention_output = torch.matmul(attention_probs, value)
+        print('attention_output:- ',attention_output.shape )
+        print('attention_probs:- ',attention_probs.shape)
         return (attention_output, attention_probs)
 
 
